@@ -46,7 +46,7 @@ class ItemProperties {
 					std::numeric_limits<T>::max()
 				);
 			}
-			SPDLOG_ERROR("Failed to convert attribute for type {}", type);
+			SPDLOG_ERROR("Failed to convert attribute for type {}", fmt::underlying(type));
 			return {};
 		}
 
@@ -466,6 +466,13 @@ class Item : virtual public Thing, public ItemProperties {
 				return getString(ItemAttribute_t::ARTICLE);
 			}
 			return items[id].article;
+		}
+
+		uint8_t getStackSize() const {
+			if (isStackable()) {
+				return items[id].stackSize;
+			}
+			return 1;
 		}
 
 		// get the number of items

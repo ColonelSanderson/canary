@@ -1050,7 +1050,7 @@ DepotLocker* Player::getDepotLocker(uint32_t depotId) {
 	}
 
 	// We need to make room for supply stash on 12+ protocol versions and remove it for 10x.
-	bool createSupplyStash = getProtocolVersion() > 1200;
+	bool createSupplyStash = !client->oldProtocol;
 
 	DepotLocker* depotLocker = new DepotLocker(ITEM_LOCKER, createSupplyStash ? 4 : 3);
 	depotLocker->setDepotId(depotId);
@@ -1106,6 +1106,75 @@ void Player::getRewardList(std::vector<uint64_t> &rewards) const {
 	for (auto &it : rewardMap) {
 		rewards.push_back(it.first);
 	}
+}
+
+std::vector<Item*> Player::getRewardsFromContainer(const Container* container) const {
+	std::vector<Item*> rewardItemsVector;
+	if (container) {
+		for (auto item : container->getItems(true)) {
+			if (item->getID() == ITEM_REWARD_CONTAINER) {
+				continue;
+			}
+
+			rewardItemsVector.push_back(item);
+		}
+	}
+
+	return rewardItemsVector;
+}
+
+ReturnValue Player::rewardChestCollect(const Container* fromCorpse /* = nullptr*/, uint32_t maxMoveItems /* = 0*/) {
+	std::vector<Item*> rewardItemsVector;
+	if (fromCorpse) {
+		auto rewardId = fromCorpse->getAttribute<time_t>(ItemAttribute_t::DATE);
+		auto reward = getReward(rewardId, false);
+		rewardItemsVector = getRewardsFromContainer(reward->getContainer());
+	} else {
+		rewardItemsVector = getRewardsFromContainer(rewardChest->getContainer());
+	}
+
+	if (rewardItemsVector.empty()) {
+		return fromCorpse ? RETURNVALUE_REWARDCONTAINERISEMPTY : RETURNVALUE_REWARDCHESTISEMPTY;
+	}
+
+	auto rewardCount = rewardItemsVector.size();
+	uint32_t movedRewardItems = 0;
+	int32_t movedRewardMoney = 0;
+	for (auto item : rewardItemsVector) {
+		if (uint32_t worth = item->getWorth(); worth > 0) {
+			movedRewardMoney += worth;
+			g_game().internalRemoveItem(item);
+			rewardCount--;
+			continue;
+		}
+
+		// Stop if player not have free capacity
+		if (getCapacity() < item->getWeight()) {
+			break;
+		}
+
+		// Limit the collect count if the "maxMoveItems" is not "0"
+		auto limitMove = maxMoveItems != 0 && movedRewardItems == maxMoveItems;
+		if (limitMove) {
+			sendCancelMessage(fmt::format("You can only collect {} items at a time.", maxMoveItems));
+			return RETURNVALUE_NOTPOSSIBLE;
+		}
+
+		ObjectCategory_t category = g_game().getObjectCategory(item);
+		if (g_game().internalQuickLootItem(this, item, category) == RETURNVALUE_NOERROR) {
+			movedRewardItems++;
+		}
+	}
+
+	if (movedRewardMoney > 0) {
+		setBankBalance(getBankBalance() + movedRewardMoney);
+	}
+
+	auto lootedMessage = fmt::format("{} of {} objects were picked up and {} gold moved to your bank.", movedRewardItems, rewardCount, movedRewardMoney);
+	sendTextMessage(MESSAGE_EVENT_ADVANCE, lootedMessage);
+
+	auto finalReturn = movedRewardItems == 0 ? RETURNVALUE_NOTENOUGHROOM : RETURNVALUE_NOERROR;
+	return finalReturn;
 }
 
 void Player::sendCancelMessage(ReturnValue message) const {
@@ -1605,6 +1674,7 @@ void Player::onRemoveCreature(Creature* creature, bool isLogout) {
 				guild->removeMember(this);
 			}
 
+			g_game().removePlayerUniqueLogin(this);
 			loginPosition = getPosition();
 			lastLogout = time(nullptr);
 			SPDLOG_INFO("{} has logged out", getName());
@@ -1673,6 +1743,20 @@ bool Player::closeShopWindow(bool sendCloseShopWindow /*= true*/) {
 }
 
 void Player::onWalk(Direction &dir) {
+	if (hasCondition(CONDITION_FEARED)) {
+		Position pos = getNextPosition(dir, getPosition());
+
+		const Tile* tile = g_game().map.getTile(pos);
+		if (tile) {
+			const MagicField* field = tile->getFieldItem();
+			if (field && !field->isBlocking() && field->getDamage() != 0) {
+				setNextActionTask(nullptr);
+				setNextAction(OTSYS_TIME() + getStepDuration(dir));
+				return;
+			}
+		}
+	}
+
 	Creature::onWalk(dir);
 	setNextActionTask(nullptr);
 	setNextAction(OTSYS_TIME() + getStepDuration(dir));
@@ -1928,8 +2012,8 @@ void Player::onThink(uint32_t interval) {
 
 	// Momentum (cooldown resets)
 	triggerMomentum();
-
-	if (!getTile()->hasFlag(TILESTATE_NOLOGOUT) && !isAccessPlayer() && !isExerciseTraining()) {
+	auto playerTile = getTile();
+	if (playerTile && !playerTile->hasFlag(TILESTATE_NOLOGOUT) && !isAccessPlayer() && !isExerciseTraining()) {
 		idleTime += interval;
 		const int32_t kickAfterMinutes = g_configManager().getNumber(KICK_AFTER_MINUTES);
 		if (idleTime > (kickAfterMinutes * 60000) + 60000) {
@@ -2084,12 +2168,19 @@ void Player::addExperience(Creature* target, uint64_t exp, bool sendText /* = fa
 		return;
 	}
 
+	// Hazard system experience
+	const Monster* monster = target && target->getMonster() ? target->getMonster() : nullptr;
+	bool handleHazardExperience = monster && monster->isOnHazardSystem() && getHazardSystemPoints() > 0;
+	if (handleHazardExperience) {
+		exp += (exp * (1.75 * getHazardSystemPoints() * g_configManager().getNumber(HAZARD_EXP_BONUS_MULTIPLIER))) / 100.;
+	}
+
 	experience += exp;
 
 	if (sendText) {
 		std::string expString = fmt::format("{} experience point{}.", exp, (exp != 1 ? "s" : ""));
 
-		TextMessage message(MESSAGE_EXPERIENCE, "You gained " + expString);
+		TextMessage message(MESSAGE_EXPERIENCE, "You gained " + expString + (handleHazardExperience ? " (Hazard)" : ""));
 		message.position = position;
 		message.primary.value = exp;
 		message.primary.color = TEXTCOLOR_WHITE_EXP;
@@ -2698,6 +2789,8 @@ void Player::despawn() {
 
 	getParent()->postRemoveNotification(this, nullptr, 0);
 
+	g_game().removePlayer(this);
+
 	// show player as pending
 	for (const auto &[key, player] : g_game().getPlayers()) {
 		player->notifyStatusChange(this, VIPSTATUS_PENDING, false);
@@ -3106,8 +3199,8 @@ ReturnValue Player::queryMaxCount(int32_t index, const Thing &thing, uint32_t co
 							n += queryCount;
 						}
 					}
-				} else if (inventoryItem->isStackable() && item->equals(inventoryItem) && inventoryItem->getItemCount() < 100) {
-					uint32_t remainder = (100 - inventoryItem->getItemCount());
+				} else if (inventoryItem->isStackable() && item->equals(inventoryItem) && inventoryItem->getItemCount() < inventoryItem->getStackSize()) {
+					uint32_t remainder = (inventoryItem->getStackSize() - inventoryItem->getItemCount());
 
 					if (queryAdd(slotIndex, *item, remainder, flags) == RETURNVALUE_NOERROR) {
 						n += remainder;
@@ -3115,7 +3208,7 @@ ReturnValue Player::queryMaxCount(int32_t index, const Thing &thing, uint32_t co
 				}
 			} else if (queryAdd(slotIndex, *item, item->getItemCount(), flags) == RETURNVALUE_NOERROR) { // empty slot
 				if (item->isStackable()) {
-					n += 100;
+					n += item->getStackSize();
 				} else {
 					++n;
 				}
@@ -3132,14 +3225,14 @@ ReturnValue Player::queryMaxCount(int32_t index, const Thing &thing, uint32_t co
 		}
 
 		if (destItem) {
-			if (destItem->isStackable() && item->equals(destItem) && destItem->getItemCount() < 100) {
-				maxQueryCount = 100 - destItem->getItemCount();
+			if (destItem->isStackable() && item->equals(destItem) && destItem->getItemCount() < destItem->getStackSize()) {
+				maxQueryCount = destItem->getStackSize() - destItem->getItemCount();
 			} else {
 				maxQueryCount = 0;
 			}
 		} else if (queryAdd(index, *item, count, flags) == RETURNVALUE_NOERROR) { // empty slot
 			if (item->isStackable()) {
-				maxQueryCount = 100;
+				maxQueryCount = item->getStackSize();
 			} else {
 				maxQueryCount = 1;
 			}
@@ -3205,7 +3298,7 @@ Cylinder* Player::queryDestination(int32_t &index, const Thing &thing, Item** de
 				if (autoStack && isStackable) {
 					// try find an already existing item to stack with
 					if (queryAdd(slotIndex, *item, item->getItemCount(), 0) == RETURNVALUE_NOERROR) {
-						if (inventoryItem->equals(item) && inventoryItem->getItemCount() < 100) {
+						if (inventoryItem->equals(item) && inventoryItem->getItemCount() < inventoryItem->getStackSize()) {
 							index = slotIndex;
 							*destItem = inventoryItem;
 							return this;
@@ -3262,7 +3355,7 @@ Cylinder* Player::queryDestination(int32_t &index, const Thing &thing, Item** de
 				}
 
 				// try find an already existing item to stack with
-				if (tmpItem->equals(item) && tmpItem->getItemCount() < 100) {
+				if (tmpItem->equals(item) && tmpItem->getItemCount() < tmpItem->getStackSize()) {
 					index = n;
 					*destItem = tmpItem;
 					return tmpContainer;
@@ -3290,6 +3383,11 @@ Cylinder* Player::queryDestination(int32_t &index, const Thing &thing, Item** de
 		*destItem = destThing->getItem();
 	}
 
+	// force quiver/shield any slot right to player cylinder
+	if (index == CONST_SLOT_RIGHT) {
+		return this;
+	}
+
 	Cylinder* subCylinder = dynamic_cast<Cylinder*>(destThing);
 	if (subCylinder) {
 		index = INDEX_WHEREEVER;
@@ -3301,6 +3399,9 @@ Cylinder* Player::queryDestination(int32_t &index, const Thing &thing, Item** de
 }
 
 void Player::addThing(int32_t index, Thing* thing) {
+	if (!thing)
+		return /*RETURNVALUE_NOTPOSSIBLE*/;
+
 	if (index < CONST_SLOT_FIRST || index > CONST_SLOT_LAST) {
 		return /*RETURNVALUE_NOTPOSSIBLE*/;
 	}
@@ -3943,6 +4044,9 @@ void Player::internalAddThing(Thing* thing) {
 }
 
 void Player::internalAddThing(uint32_t index, Thing* thing) {
+	if (!thing)
+		return;
+
 	Item* item = thing->getItem();
 	if (!item) {
 		return;
@@ -4095,6 +4199,18 @@ void Player::onWalkAborted() {
 }
 
 void Player::onWalkComplete() {
+	if (hasCondition(CONDITION_FEARED)) {
+		/**
+		 * The walk is only processed during the fear condition execution,
+		 * but adding this check and executing the condition here as soon it ends
+		 * makes the fleeing more smooth and with litle to no hickups.
+		 */
+
+		SPDLOG_DEBUG("[Player::onWalkComplete] Executing feared conditions as players completed it's walk.");
+		Condition* f = getCondition(CONDITION_FEARED);
+		f->executeCondition(this, 0);
+	}
+
 	if (walkTask) {
 		walkTaskEvent = g_scheduler().addEvent(walkTask);
 		walkTask = nullptr;
@@ -4165,6 +4281,10 @@ void Player::onAddCombatCondition(ConditionType_t type) {
 
 		case CONDITION_ROOTED:
 			sendTextMessage(MESSAGE_FAILURE, "You are rooted.");
+			break;
+
+		case CONDITION_FEARED:
+			sendTextMessage(MESSAGE_FAILURE, "You are feared.");
 			break;
 
 		case CONDITION_CURSED:
@@ -4525,11 +4645,16 @@ bool Player::canLogout() {
 		return false;
 	}
 
-	if (getTile()->hasFlag(TILESTATE_NOLOGOUT)) {
+	auto tile = getTile();
+	if (!tile) {
 		return false;
 	}
 
-	if (getTile()->hasFlag(TILESTATE_PROTECTIONZONE)) {
+	if (tile->hasFlag(TILESTATE_NOLOGOUT)) {
+		return false;
+	}
+
+	if (tile->hasFlag(TILESTATE_PROTECTIONZONE)) {
 		return true;
 	}
 
@@ -4913,6 +5038,10 @@ void Player::setPremiumDays(int32_t v) {
 
 void Player::setTibiaCoins(int32_t v) {
 	coinBalance = v;
+}
+
+void Player::setTransferableTibiaCoins(int32_t v) {
+	coinTransferableBalance = v;
 }
 
 PartyShields_t Player::getPartyShield(const Player* player) const {
@@ -5607,6 +5736,16 @@ void Player::updateUIExhausted() {
 	lastUIInteraction = OTSYS_TIME();
 }
 
+void Player::setImmuneFear() {
+	m_fearCondition.first = CONDITION_FEARED;
+	m_fearCondition.second = OTSYS_TIME() + 10000;
+}
+
+bool Player::isImmuneFear() const {
+	uint64_t timenow = OTSYS_TIME();
+	return (m_fearCondition.first == CONDITION_FEARED) && (timenow <= m_fearCondition.second);
+}
+
 uint64_t Player::getItemCustomPrice(uint16_t itemId, bool buyPrice /* = false*/) const {
 	auto it = itemPriceMap.find(itemId);
 	if (it != itemPriceMap.end()) {
@@ -5752,10 +5891,18 @@ void Player::stowItem(Item* item, uint32_t count, bool allItems) {
 
 	StashContainerList itemDict;
 	if (allItems) {
-		// Stow player backpack
-		if (auto inventoryItem = getInventoryItem(CONST_SLOT_BACKPACK);
-			inventoryItem && !item->isInsideDepot(true)) {
-			sendStowItems(*item, *inventoryItem, itemDict);
+		if (!item->isInsideDepot(true)) {
+			// Stow "all items" from player backpack
+			if (auto backpack = getInventoryItem(CONST_SLOT_BACKPACK)) {
+				sendStowItems(*item, *backpack, itemDict);
+			}
+
+			// Stow "all items" from loot pouch
+			auto itemParent = item->getParent();
+			auto lootPouch = itemParent->getItem();
+			if (itemParent && lootPouch && lootPouch->getID() == ITEM_GOLD_POUCH) {
+				sendStowItems(*item, *lootPouch, itemDict);
+			}
 		}
 
 		// Stow locker items
@@ -5873,7 +6020,7 @@ void Player::initializeTaskHunting() {
 		}
 	}
 
-	if (client && g_configManager().getBoolean(TASK_HUNTING_ENABLED) && getProtocolVersion() > 1200) {
+	if (client && g_configManager().getBoolean(TASK_HUNTING_ENABLED) && !client->oldProtocol) {
 		client->writeToOutputBuffer(g_ioprey().GetTaskHuntingBaseDate());
 	}
 }
@@ -6388,7 +6535,7 @@ void Player::forgeFuseItems(uint16_t itemId, uint8_t tier, bool success, bool re
 		}
 		if (bonus != 2) {
 			if (coreCount != 0 && !removeItemCountById(ITEM_FORGE_CORE, coreCount)) {
-				SPDLOG_ERROR("[{}][Log 1] Failed to remove item 'id :{} count: {}' from player {}", __FUNCTION__, ITEM_FORGE_CORE, coreCount, getName());
+				SPDLOG_ERROR("[{}][Log 1] Failed to remove item 'id :{} count: {}' from player {}", __FUNCTION__, fmt::underlying(ITEM_FORGE_CORE), coreCount, getName());
 				sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 				return;
 			}
@@ -6463,7 +6610,7 @@ void Player::forgeFuseItems(uint16_t itemId, uint8_t tier, bool success, bool re
 		}
 
 		if (coreCount != 0 && !removeItemCountById(ITEM_FORGE_CORE, coreCount)) {
-			SPDLOG_ERROR("[{}][Log 2] Failed to remove item 'id: {}, count: {}' from player {}", __FUNCTION__, ITEM_FORGE_CORE, coreCount, getName());
+			SPDLOG_ERROR("[{}][Log 2] Failed to remove item 'id: {}, count: {}' from player {}", __FUNCTION__, fmt::underlying(ITEM_FORGE_CORE), coreCount, getName());
 			sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 			return;
 		}
@@ -6492,7 +6639,7 @@ void Player::forgeFuseItems(uint16_t itemId, uint8_t tier, bool success, bool re
 	}
 	returnValue = g_game().internalAddItem(this, exaltationContainer, INDEX_WHEREEVER);
 	if (returnValue != RETURNVALUE_NOERROR) {
-		SPDLOG_ERROR("Failed to add exaltation chest to player with name {}", ITEM_EXALTATION_CHEST, getName());
+		SPDLOG_ERROR("Failed to add exaltation chest to player with name {}", fmt::underlying(ITEM_EXALTATION_CHEST), getName());
 		sendCancelMessage(getReturnMessage(returnValue));
 		sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 		return;
@@ -6607,7 +6754,7 @@ void Player::forgeTransferItemTier(uint16_t donorItemId, uint8_t tier, uint16_t 
 	}
 
 	if (!removeItemCountById(ITEM_FORGE_CORE, coresAmount)) {
-		SPDLOG_ERROR("[{}] Failed to remove item 'id: {}, count: {}' from player {}", __FUNCTION__, ITEM_FORGE_CORE, 1, getName());
+		SPDLOG_ERROR("[{}] Failed to remove item 'id: {}, count: {}' from player {}", __FUNCTION__, fmt::underlying(ITEM_FORGE_CORE), 1, getName());
 		sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 		return;
 	}
@@ -6621,7 +6768,7 @@ void Player::forgeTransferItemTier(uint16_t donorItemId, uint8_t tier, uint16_t 
 
 	returnValue = g_game().internalAddItem(this, exaltationContainer, INDEX_WHEREEVER);
 	if (returnValue != RETURNVALUE_NOERROR) {
-		SPDLOG_ERROR("[Log 10] Failed to add forge item {} from player with name {}", ITEM_EXALTATION_CHEST, getName());
+		SPDLOG_ERROR("[Log 10] Failed to add forge item {} from player with name {}", fmt::underlying(ITEM_EXALTATION_CHEST), getName());
 		sendCancelMessage(getReturnMessage(returnValue));
 		sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 		return;
@@ -6673,7 +6820,7 @@ void Player::forgeResourceConversion(uint8_t action) {
 		}
 
 		if (!removeItemCountById(ITEM_FORGE_SLIVER, cost)) {
-			SPDLOG_ERROR("[{}] Failed to remove item 'id: {}, count {}' from player {}", __FUNCTION__, ITEM_FORGE_SLIVER, cost, getName());
+			SPDLOG_ERROR("[{}] Failed to remove item 'id: {}, count {}' from player {}", __FUNCTION__, fmt::underlying(ITEM_FORGE_SLIVER), cost, getName());
 			sendForgeError(RETURNVALUE_CONTACTADMINISTRATOR);
 			return;
 		}
@@ -6982,6 +7129,225 @@ SoundEffect_t Player::getAttackSoundEffect() const {
 	}
 
 	return SoundEffect_t::SILENCE;
+}
+
+bool Player::canAutoWalk(const Position &toPosition, const std::function<void()> &function, uint32_t delay /* = 500*/) {
+	if (!Position::areInRange<1, 1>(getPosition(), toPosition)) {
+		// Check if can walk to the toPosition and send event to use function
+		std::forward_list<Direction> listDir;
+		if (getPathTo(toPosition, listDir, 0, 1, true, true)) {
+			g_dispatcher().addTask(createTask(std::bind(&Game::playerAutoWalk, &g_game(), getID(), listDir)));
+
+			SchedulerTask* task = createSchedulerTask(delay, function);
+			setNextWalkActionTask(task);
+			return true;
+		} else {
+			sendCancelMessage(RETURNVALUE_THEREISNOWAY);
+		}
+	}
+	return false;
+}
+
+/*******************************************************************************
+ * Hazard system
+ ******************************************************************************/
+
+void Player::addHazardSystemPoints(int32_t amount) {
+	addStorageValue(STORAGEVALUE_HAZARDCOUNT, std::max<int32_t>(0, std::min<int32_t>(0xFFFF, static_cast<int32_t>(getHazardSystemPoints()) + amount)), true);
+	reloadHazardSystemPointsCounter = true;
+	if (hazardSystemReferenceCounter > 0) {
+		const auto tile = getTile();
+		if (!tile) {
+			return;
+		}
+
+		SpectatorHashSet spectators;
+		g_game().map.getSpectators(spectators, tile->getPosition(), true);
+		for (Creature* spectator : spectators) {
+			if (!spectator || spectator == this) {
+				continue;
+			}
+
+			Player* player = spectator->getPlayer();
+			if (player && !client->oldProtocol) {
+				player->sendCreatureIcon(getPlayer());
+			}
+		}
+
+		if (client && !client->oldProtocol) {
+			client->reloadHazardSystemIcon(hazardSystemReferenceCounter);
+		}
+	}
+}
+
+void Player::parseAttackRecvHazardSystem(CombatDamage &damage, const Monster* monster) {
+	if (!monster || !monster->isOnHazardSystem()) {
+		return;
+	}
+
+	if (!g_configManager().getBoolean(TOGGLE_HAZARDSYSTEM)) {
+		return;
+	}
+
+	if (damage.primary.type == COMBAT_HEALING) {
+		return;
+	}
+
+	auto points = getHazardSystemPoints();
+	if (party) {
+		for (const auto partyMember : party->getMembers()) {
+			if (partyMember && partyMember->getHazardSystemPoints() < points) {
+				points = partyMember->getHazardSystemPoints();
+			}
+		}
+
+		if (party->getLeader() && party->getLeader()->getHazardSystemPoints() < points) {
+			points = party->getLeader()->getHazardSystemPoints();
+		}
+	}
+
+	if (points == 0) {
+		return;
+	}
+
+	uint16_t stage = 0;
+	auto chance = static_cast<uint16_t>(normal_random(1, 10000));
+	// Critical chance
+	if ((lastHazardSystemCriticalHit + g_configManager().getNumber(HAZARD_CRITICAL_INTERVAL)) <= OTSYS_TIME() && chance <= monster->getHazardSystemCritChance() && !damage.critical) {
+		damage.critical = true;
+		damage.extension = true;
+		damage.exString = "(Hazard)";
+
+		stage = (points - 1) * static_cast<uint16_t>(g_configManager().getNumber(HAZARD_CRITICAL_MULTIPLIER));
+		damage.primary.value += static_cast<int32_t>(std::ceil((static_cast<double>(damage.primary.value) * (5000 + stage)) / 10000));
+		damage.secondary.value += static_cast<int32_t>(std::ceil((static_cast<double>(damage.secondary.value) * (5000 + stage)) / 10000));
+		lastHazardSystemCriticalHit = OTSYS_TIME();
+	}
+
+	// To prevent from punish the player twice with critical + damage boost, just uncomment code from the if
+	if (monster->getHazardSystemDamageBoost() /* && !damage.critical*/) {
+		stage = points * static_cast<uint16_t>(g_configManager().getNumber(HAZARD_DAMAGE_MULTIPLIER));
+		if (stage != 0) {
+			damage.extension = true;
+			damage.exString = "(Hazard)";
+			damage.primary.value += static_cast<int32_t>(std::ceil((static_cast<double>(damage.primary.value) * stage) / 10000));
+			if (damage.secondary.value != 0) {
+				damage.secondary.value += static_cast<int32_t>(std::ceil((static_cast<double>(damage.secondary.value) * stage) / 10000));
+			}
+		}
+	}
+}
+
+void Player::parseAttackDealtHazardSystem(CombatDamage &damage, const Monster* monster) {
+	if (!g_configManager().getBoolean(TOGGLE_HAZARDSYSTEM)) {
+		return;
+	}
+
+	if (!monster || !monster->isOnHazardSystem()) {
+		return;
+	}
+
+	if (damage.primary.type == COMBAT_HEALING) {
+		return;
+	}
+
+	auto points = getHazardSystemPoints();
+	if (party) {
+		for (const auto partyMember : party->getMembers()) {
+			if (partyMember && partyMember->getHazardSystemPoints() < points) {
+				points = partyMember->getHazardSystemPoints();
+			}
+		}
+
+		if (party->getLeader() && party->getLeader()->getHazardSystemPoints() < points) {
+			points = party->getLeader()->getHazardSystemPoints();
+		}
+	}
+
+	if (points == 0) {
+		return;
+	}
+
+	// Dodge chance
+	uint16_t stage;
+	if (monster->getHazardSystemDodge()) {
+		stage = points * g_configManager().getNumber(HAZARD_DODGE_MULTIPLIER);
+		auto chance = static_cast<uint16_t>(normal_random(1, 10000));
+		if (chance <= stage) {
+			damage.primary.value = 0;
+			damage.secondary.value = 0;
+			return;
+		}
+	}
+}
+
+void Player::reloadHazardSystemIcon() {
+	if (reloadHazardSystemPointsCounter) {
+		reloadHazardSystemPointsCounter = false;
+		if (getHazardSystemPoints() > 0) {
+			const auto tile = getTile();
+			if (!tile) {
+				return;
+			}
+
+			SpectatorHashSet spectators;
+			g_game().map.getSpectators(spectators, tile->getPosition(), true);
+			for (Creature* spectator : spectators) {
+				if (!spectator || spectator == this) {
+					continue;
+				}
+
+				Player* player = spectator->getPlayer();
+				if (player && !client->oldProtocol) {
+					player->sendCreatureIcon(getPlayer());
+				}
+			}
+		}
+		if (client && !client->oldProtocol) {
+			client->reloadHazardSystemIcon(hazardSystemReferenceCounter);
+		}
+	}
+}
+
+void Player::incrementeHazardSystemReference() {
+	hazardSystemReferenceCounter++;
+	if (hazardSystemReferenceCounter != 0) {
+		reloadHazardSystemIcon();
+	}
+}
+
+void Player::decrementeHazardSystemReference() {
+	if (hazardSystemReferenceCounter == 0) {
+		return;
+	}
+
+	hazardSystemReferenceCounter--;
+	if (hazardSystemReferenceCounter == 0) {
+		if (getHazardSystemPoints() > 0) {
+			Tile* tile = getTile();
+			if (!tile) {
+				return;
+			}
+
+			SpectatorHashSet spectators;
+			g_game().map.getSpectators(spectators, tile->getPosition(), true);
+			for (Creature* spectator : spectators) {
+				if (!spectator || spectator == this) {
+					continue;
+				}
+
+				Player* player = spectator->getPlayer();
+				if (player) {
+					player->sendCreatureIcon(getPlayer());
+				}
+			}
+		}
+
+		if (client) {
+			client->reloadHazardSystemIcon(hazardSystemReferenceCounter);
+		}
+		reloadHazardSystemPointsCounter = true;
+	}
 }
 
 /*******************************************************************************

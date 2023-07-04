@@ -1631,7 +1631,7 @@ int PlayerFunctions::luaPlayerAddItem(lua_State* L) {
 		itemCount = std::max<int32_t>(1, count);
 	} else if (it.hasSubType()) {
 		if (it.stackable) {
-			itemCount = std::ceil(count / 100.f);
+			itemCount = std::ceil(count / (float_t)it.stackSize);
 		}
 
 		subType = count;
@@ -1653,7 +1653,7 @@ int PlayerFunctions::luaPlayerAddItem(lua_State* L) {
 	for (int32_t i = 1; i <= itemCount; ++i) {
 		int32_t stackCount = subType;
 		if (it.stackable) {
-			stackCount = std::min<int32_t>(stackCount, 100);
+			stackCount = std::min<int32_t>(stackCount, it.stackSize);
 			subType -= stackCount;
 		}
 
@@ -2351,6 +2351,65 @@ int PlayerFunctions::luaPlayerRemoveTibiaCoins(lua_State* L) {
 	account.LoadAccountDB();
 	if (account.RemoveCoins(coins)) {
 		account.GetCoins(&(player->coinBalance));
+		pushBoolean(L, true);
+	} else {
+		lua_pushnil(L);
+	}
+
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerGetTransferableCoins(lua_State* L) {
+	// player:getTransferableCoins()
+	Player* player = getUserdata<Player>(L, 1);
+	if (player) {
+		account::Account account(player->getAccount());
+		account.LoadAccountDB();
+		uint32_t coins;
+		account.GetTransferableCoins(&coins);
+		lua_pushnumber(L, coins);
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerAddTransferableCoins(lua_State* L) {
+	// player:addTransferableCoins(coins)
+	Player* player = getUserdata<Player>(L, 1);
+	if (!player) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	uint32_t coins = getNumber<uint32_t>(L, 2);
+
+	account::Account account(player->getAccount());
+	account.LoadAccountDB();
+	if (account.AddTransferableCoins(coins)) {
+		account.GetTransferableCoins(&(player->coinTransferableBalance));
+		pushBoolean(L, true);
+	} else {
+		lua_pushnil(L);
+	}
+
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerRemoveTransferableCoins(lua_State* L) {
+	// player:removeTransferableCoins(coins)
+	Player* player = getUserdata<Player>(L, 1);
+	if (!player) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	uint32_t coins = getNumber<uint32_t>(L, 2);
+
+	account::Account account(player->getAccount());
+	account.LoadAccountDB();
+	if (account.RemoveTransferableCoins(coins)) {
+		account.GetTransferableCoins(&(player->coinTransferableBalance));
 		pushBoolean(L, true);
 	} else {
 		lua_pushnil(L);
@@ -3420,5 +3479,33 @@ int PlayerFunctions::luaPlayerRemoveGroupFlag(lua_State* L) {
 	}
 
 	player->removeFlag(getNumber<PlayerFlags_t>(L, 2));
+	return 1;
+}
+
+// Hazard system
+int PlayerFunctions::luaPlayerAddHazardSystemPoints(lua_State* L) {
+	// player:addHazardSystemPoints(amount)
+	Player* player = getUserdata<Player>(L, 1);
+	if (!player) {
+		pushBoolean(L, false);
+		reportErrorFunc(getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
+		return 1;
+	}
+
+	player->addHazardSystemPoints(getNumber<int32_t>(L, 2, 0));
+	pushBoolean(L, true);
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerGetHazardSystemPoints(lua_State* L) {
+	// player:getHazardSystemPoints()
+	const auto player = getUserdata<Player>(L, 1);
+	if (!player) {
+		pushBoolean(L, false);
+		reportErrorFunc(getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
+		return 1;
+	}
+
+	lua_pushnumber(L, player->getHazardSystemPoints());
 	return 1;
 }
