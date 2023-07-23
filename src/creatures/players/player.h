@@ -337,6 +337,47 @@ class Player final : public Creature, public Cylinder {
 		Party* getParty() const {
 			return party;
 		}
+
+		int32_t getCleavePercent(bool useCharges = false) const;
+
+		void setCleavePercent(int32_t value) {
+			cleavePercent = std::max(0, cleavePercent + value);
+		}
+
+		int32_t getPerfectShotDamage(uint8_t range, bool useCharges = false) const;
+
+		void setPerfectShotDamage(uint8_t range, int32_t damage) {
+			int32_t actualDamage = getPerfectShotDamage(range);
+			bool aboveZero = (actualDamage != 0);
+			actualDamage += damage;
+			if (actualDamage == 0 && aboveZero)
+				perfectShot.erase(range);
+			else
+				perfectShot[range] = actualDamage;
+		}
+
+		int32_t getSpecializedMagicLevel(CombatType_t combat, bool useCharges = false) const;
+
+		void setSpecializedMagicLevel(CombatType_t combat, int32_t value) {
+			specializedMagicLevel[combatTypeToIndex(combat)] = std::max(0, specializedMagicLevel[combatTypeToIndex(combat)] + value);
+		}
+
+		int32_t getMagicShieldCapacityFlat(bool useCharges = false) const;
+
+		void setMagicShieldCapacityFlat(int32_t value) {
+			magicShieldCapacityFlat += value;
+		}
+
+		int32_t getMagicShieldCapacityPercent(bool useCharges = false) const;
+
+		void setMagicShieldCapacityPercent(int32_t value) {
+			magicShieldCapacityPercent += value;
+		}
+
+		int32_t getReflectPercent(CombatType_t combat, bool useCharges = false) const override;
+
+		int32_t getReflectFlat(CombatType_t combat, bool useCharges = false) const override;
+
 		PartyShields_t getPartyShield(const Player* player) const;
 		bool isInviting(const Player* player) const;
 		bool isPartner(const Player* player) const;
@@ -657,8 +698,8 @@ class Player final : public Creature, public Cylinder {
 		void setVarStats(stats_t stat, int32_t modifier);
 		int32_t getDefaultStats(stats_t stat) const;
 
-		void addConditionSuppressions(uint32_t conditions);
-		void removeConditionSuppressions(uint32_t conditions);
+		void addConditionSuppressions(const std::array<ConditionType_t, ConditionType_t::CONDITION_COUNT> &addCondition);
+		void removeConditionSuppressions();
 
 		Reward* getReward(const uint64_t rewardId, const bool autoCreate);
 		void removeReward(uint64_t rewardId);
@@ -775,7 +816,7 @@ class Player final : public Creature, public Cylinder {
 			return lastAttack > 0 && ((OTSYS_TIME() - lastAttack) >= getAttackSpeed());
 		}
 
-		uint16_t getSkillLevel(skills_t skill, bool sendToClient = false) const;
+		uint16_t getSkillLevel(skills_t skill) const;
 		uint16_t getLoyaltySkill(skills_t skill) const;
 		uint16_t getBaseSkill(uint8_t skill) const {
 			return skills[skill].level;
@@ -1222,7 +1263,7 @@ class Player final : public Creature, public Cylinder {
 				client->sendPlayerVocation(player);
 			}
 		}
-		void sendDistanceShoot(const Position &from, const Position &to, uint8_t type) const {
+		void sendDistanceShoot(const Position &from, const Position &to, uint16_t type) const {
 			if (client) {
 				client->sendDistanceShoot(from, to, type);
 			}
@@ -1249,12 +1290,12 @@ class Player final : public Creature, public Cylinder {
 				client->sendGameNews();
 			}
 		}
-		void sendMagicEffect(const Position &pos, uint8_t type) const {
+		void sendMagicEffect(const Position &pos, uint16_t type) const {
 			if (client) {
 				client->sendMagicEffect(pos, type);
 			}
 		}
-		void removeMagicEffect(const Position &pos, uint8_t type) const {
+		void removeMagicEffect(const Position &pos, uint16_t type) const {
 			if (client) {
 				client->removeMagicEffect(pos, type);
 			}
@@ -2285,8 +2326,6 @@ class Player final : public Creature, public Cylinder {
 
 		void registerForgeHistoryDescription(ForgeHistory history);
 
-		std::map<uint16_t, Item*> getEquippedItemsWithEnabledAbilitiesBySlot() const;
-
 		void setBossPoints(uint32_t amount) {
 			bossPoints = amount;
 		}
@@ -2370,6 +2409,31 @@ class Player final : public Creature, public Cylinder {
 		void reloadHazardSystemIcon();
 		/*******************************************************************************/
 
+		// Concoction system
+		void updateConcoction(uint16_t itemId, uint16_t timeLeft) {
+			if (timeLeft < 0) {
+				activeConcoctions.erase(itemId);
+			} else {
+				activeConcoctions[itemId] = timeLeft;
+			}
+		}
+		std::map<uint16_t, uint16_t> getActiveConcoctions() const {
+			return activeConcoctions;
+		}
+
+		// Get specific inventory item from itemid
+		std::vector<Item*> getInventoryItemsFromId(uint16_t itemId, bool ignore = true) const;
+
+		// This get all player inventory items
+		std::vector<Item*> getAllInventoryItems(bool ignoreEquiped = false, bool ignoreItemWithTier = false) const;
+
+		/**
+		 * @brief Get the equipped items of the player.
+		 * @details This function returns a vector containing the items currently equipped by the player
+		 * @return A vector of pointers to the equipped items.
+		 */
+		std::vector<Item*> getEquippedItems() const;
+
 		// Player wheel methods interface
 		std::unique_ptr<PlayerWheel> &wheel();
 		const std::unique_ptr<PlayerWheel> &wheel() const;
@@ -2429,11 +2493,6 @@ class Player final : public Creature, public Cylinder {
 		void stashContainer(StashContainerList itemDict);
 		ItemsTierCountList getInventoryItemsId() const;
 
-		// Get specific inventory item from itemid
-		std::vector<Item*> getInventoryItemsFromId(uint16_t itemId, bool ignore = true) const;
-
-		// This get all player inventory items
-		std::vector<Item*> getAllInventoryItems(bool ignoreEquiped = false, bool ignoreItemWithTier = false) const;
 		// This function is a override function of base class
 		std::map<uint32_t, uint32_t> &getAllItemTypeCount(std::map<uint32_t, uint32_t> &countMap) const override;
 		// Function from player class with correct type sizes (uint16_t)
@@ -2548,8 +2607,8 @@ class Player final : public Creature, public Cylinder {
 		uint32_t capacity = 40000;
 		uint32_t bonusCapacity = 0;
 		uint32_t damageImmunities = 0;
-		uint32_t conditionImmunities = 0;
-		uint32_t conditionSuppressions = 0;
+		std::array<ConditionType_t, ConditionType_t::CONDITION_COUNT> conditionImmunities = {};
+		std::array<ConditionType_t, ConditionType_t::CONDITION_COUNT> conditionSuppressions = {};
 		uint32_t level = 1;
 		uint32_t magLevel = 0;
 		uint32_t actionTaskEvent = 0;
@@ -2667,6 +2726,16 @@ class Player final : public Creature, public Cylinder {
 		bool reloadHazardSystemPointsCounter = true;
 		// Hazard end
 
+		// Concoctions
+		// [ConcoctionID] = time
+		std::map<uint16_t, uint16_t> activeConcoctions;
+
+		int32_t specializedMagicLevel[COMBAT_COUNT] = { 0 };
+		int32_t cleavePercent = 0;
+		std::map<uint8_t, int32_t> perfectShot;
+		int32_t magicShieldCapacityFlat = 0;
+		int32_t magicShieldCapacityPercent = 0;
+
 		void updateItemsLight(bool internal = false);
 		uint16_t getStepSpeed() const override {
 			return std::max<uint16_t>(PLAYER_MIN_SPEED, std::min<uint16_t>(PLAYER_MAX_SPEED, getSpeed()));
@@ -2685,8 +2754,23 @@ class Player final : public Creature, public Cylinder {
 
 		bool isPromoted() const;
 
+		bool onFistAttackSpeed = g_configManager().getBoolean(TOGGLE_ATTACK_SPEED_ONFIST);
+		uint32_t MAX_ATTACK_SPEED = g_configManager().getNumber(MAX_SPEED_ATTACKONFIST);
+
 		uint32_t getAttackSpeed() const {
-			return vocation->getAttackSpeed();
+			if (onFistAttackSpeed) {
+				uint32_t baseAttackSpeed = vocation->getAttackSpeed();
+				uint32_t skillLevel = getSkillLevel(SKILL_FIST);
+				uint32_t attackSpeed = baseAttackSpeed - (skillLevel * g_configManager().getNumber(MULTIPLIER_ATTACKONFIST));
+
+				if (attackSpeed < MAX_ATTACK_SPEED) {
+					attackSpeed = MAX_ATTACK_SPEED;
+				}
+
+				return static_cast<uint32_t>(attackSpeed);
+			} else {
+				return vocation->getAttackSpeed();
+			}
 		}
 
 		static double_t getPercentLevel(uint64_t count, uint64_t nextLevelCount);
@@ -2697,10 +2781,10 @@ class Player final : public Creature, public Cylinder {
 		uint32_t getDamageImmunities() const override {
 			return damageImmunities;
 		}
-		uint32_t getConditionImmunities() const override {
+		const std::array<ConditionType_t, ConditionType_t::CONDITION_COUNT> &getConditionImmunities() const override {
 			return conditionImmunities;
 		}
-		uint32_t getConditionSuppressions() const override {
+		const std::array<ConditionType_t, ConditionType_t::CONDITION_COUNT> &getConditionSuppressions() const override {
 			return conditionSuppressions;
 		}
 		uint16_t getLookCorpse() const override;
@@ -2714,6 +2798,7 @@ class Player final : public Creature, public Cylinder {
 		}
 
 		void triggerMomentum();
+		void clearCooldowns();
 
 		friend class Game;
 		friend class Npc;

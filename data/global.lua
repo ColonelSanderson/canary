@@ -31,6 +31,17 @@ SOUTHEAST = DIRECTION_SOUTHEAST
 NORTHWEST = DIRECTION_NORTHWEST
 NORTHEAST = DIRECTION_NORTHEAST
 
+DIRECTIONS_TABLE = {
+	DIRECTION_NORTH,
+	DIRECTION_EAST,
+	DIRECTION_SOUTH,
+	DIRECTION_WEST,
+	DIRECTION_SOUTHWEST,
+	DIRECTION_SOUTHEAST,
+	DIRECTION_NORTHWEST,
+	DIRECTION_NORTHEAST
+}
+
 STORAGEVALUE_PROMOTION = 30018
 
 SERVER_NAME = configManager.getString(configKeys.SERVER_NAME)
@@ -101,6 +112,10 @@ end
 
 if nextUseXpStamina == nil then
 	nextUseXpStamina = {}
+end
+
+if nextUseConcoctionTime == nil then
+	nextUseConcoctionTime = {}
 end
 
 if lastItemImbuing == nil then

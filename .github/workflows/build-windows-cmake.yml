@@ -1,6 +1,5 @@
 ---
-name: Build - Windows
-
+name: Build - Windows - CMake
 on:
   workflow_dispatch:
   pull_request:
@@ -8,11 +7,9 @@ on:
   push:
     branches:
       - main
-
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 2
   MAKEFLAGS: '-j 2'
-
 jobs:
   job:
     if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
@@ -21,13 +18,12 @@ jobs:
     strategy:
       matrix:
         os: [windows-2022]
-        buildtype: [windows-release, windows-release-asan]
+        buildtype: [windows-release]
         include:
           - os: windows-2022
-            triplet: x64-windows
+            triplet: x64-windows-static
             packages: >
               sccache
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@main

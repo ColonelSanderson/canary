@@ -50,6 +50,7 @@ option(OPTIONS_ENABLE_OPENMP "Enable Open Multi-Processing support." ON)
 option(DEBUG_LOG "Enable Debug Log" OFF)
 option(ASAN_ENABLED "Build this target with AddressSanitizer" OFF)
 option(BUILD_STATIC_LIBRARY "Build using static libraries" OFF)
+option(SPEED_UP_BUILD_UNITY "Compile using build unity for speed up build" ON)
 
 
 # *****************************************************************************
@@ -130,6 +131,12 @@ endif(DEBUG_LOG)
 # === PRECOMPILED HEADER ===
 target_precompile_headers(${PROJECT_NAME} PRIVATE pch.hpp)
 
+# === UNITY BUILD (compile time reducer) ===
+if(SPEED_UP_BUILD_UNITY)
+	set_target_properties(${PROJECT_NAME} PROPERTIES UNITY_BUILD ON)
+	log_option_enabled("Build unity for speed up compilation")
+endif()
+
 # *****************************************************************************
 # Packages / Libs
 # *****************************************************************************
@@ -144,6 +151,7 @@ find_package(magic_enum CONFIG REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(unofficial-argon2 CONFIG REQUIRED)
 find_package(unofficial-libmariadb CONFIG REQUIRED)
 find_package(mio REQUIRED)
 find_package(Threads REQUIRED)
@@ -290,6 +298,7 @@ PRIVATE
 	map/map.cpp
 	otserv.cpp
 	pch.cpp
+	security/argon.cpp
 	security/rsa.cpp
 	server/network/connection/connection.cpp
 	server/network/message/networkmessage.cpp
@@ -353,6 +362,7 @@ if (MSVC)
 			protobuf::libprotobuf
 			pugixml::pugixml
 			spdlog::spdlog
+			unofficial::argon2::libargon2
 			unofficial::libmariadb
 			unofficial::mariadbclient
 			ZLIB::ZLIB
@@ -382,6 +392,7 @@ else()
 			protobuf::libprotobuf
 			pugixml::pugixml
 			spdlog::spdlog
+			unofficial::argon2::libargon2
 			unofficial::libmariadb
 			unofficial::mariadbclient
 			ZLIB::ZLIB
