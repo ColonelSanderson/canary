@@ -147,6 +147,7 @@ void LuaEnums::initOthersEnums(lua_State* L) {
 	registerEnum(L, LIGHT_STATE_SUNSET);
 	registerEnum(L, LIGHT_STATE_SUNRISE);
 	registerEnum(L, STORAGEVALUE_EMOTE);
+	registerEnum(L, STORAGEVALUE_AUTO_LOOT);
 
 	registerEnum(L, IMMOVABLE_ACTION_ID);
 
@@ -427,6 +428,7 @@ void LuaEnums::initConditionParamEnums(lua_State* L) {
 	registerEnum(L, CONDITION_PARAM_INCREASE_LIFEDRAINPERCENT);
 	registerEnum(L, CONDITION_PARAM_INCREASE_MANADRAINPERCENT);
 	registerEnum(L, CONDITION_PARAM_INCREASE_DROWNPERCENT);
+	registerEnum(L, CONDITION_PARAM_CHARM_CHANCE_MODIFIER);
 }
 
 void LuaEnums::initConstMeEnums(lua_State* L) {
