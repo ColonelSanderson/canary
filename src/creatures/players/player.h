@@ -1631,6 +1631,15 @@ class Player final : public Creature, public Cylinder {
 			return nextPotionAction <= OTSYS_TIME();
 		}
 
+        void setNextRuneAction(int64_t time) {
+            if (time > nextRuneAction) {
+                nextRuneAction = time;
+            }
+        }
+        bool canDoRuneAction() const {
+            return nextRuneAction <= OTSYS_TIME();
+        }
+
 		void cancelPush();
 
 		void setModuleDelay(uint8_t byteortype, int16_t delay) {
@@ -1646,6 +1655,7 @@ class Player final : public Creature, public Cylinder {
 
 		uint32_t getNextActionTime() const;
 		uint32_t getNextPotionActionTime() const;
+        uint32_t getNextRuneActionTime() const;
 
 		Item* getWriteItem(uint32_t &windowTextId, uint16_t &maxWriteLen);
 		void setWriteItem(Item* item, uint16_t maxWriteLen = 0);
@@ -2485,6 +2495,7 @@ class Player final : public Creature, public Cylinder {
 		void setNextActionTask(SchedulerTask* task, bool resetIdleTime = true);
 		void setNextActionPushTask(SchedulerTask* task);
 		void setNextPotionActionTask(SchedulerTask* task);
+        void setNextRuneActionTask(SchedulerTask* task);
 
 		void death(Creature* lastHitCreature) override;
 		bool spawn();
@@ -2598,6 +2609,7 @@ class Player final : public Creature, public Cylinder {
 		int64_t lastPong;
 		int64_t nextAction = 0;
 		int64_t nextPotionAction = 0;
+        int64_t nextRuneAction = 0;
 		int64_t lastQuickLootNotification = 0;
 		int64_t lastWalking = 0;
 		uint64_t asyncOngoingTasks = 0;
@@ -2633,7 +2645,8 @@ class Player final : public Creature, public Cylinder {
 		uint32_t magLevel = 0;
 		uint32_t actionTaskEvent = 0;
 		uint32_t actionTaskEventPush = 0;
-		uint32_t actionPotionTaskEvent = 0;
+        uint32_t actionPotionTaskEvent = 0;
+        uint32_t actionRuneTaskEvent = 0;
 		uint32_t nextStepEvent = 0;
 		uint32_t walkTaskEvent = 0;
 		uint32_t MessageBufferTicks = 0;

@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:23.04 AS builder
 
 WORKDIR /opt
 

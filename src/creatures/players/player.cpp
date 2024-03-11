@@ -2024,17 +2024,31 @@ void Player::setNextActionPushTask(SchedulerTask* task) {
 }
 
 void Player::setNextPotionActionTask(SchedulerTask* task) {
-	if (actionPotionTaskEvent != 0) {
-		g_scheduler().stopEvent(actionPotionTaskEvent);
-		actionPotionTaskEvent = 0;
-	}
+    if (actionPotionTaskEvent != 0) {
+        g_scheduler().stopEvent(actionPotionTaskEvent);
+        actionPotionTaskEvent = 0;
+    }
 
-	cancelPush();
+    cancelPush();
 
-	if (task) {
-		actionPotionTaskEvent = g_scheduler().addEvent(task);
-		// resetIdleTime();
-	}
+    if (task) {
+        actionPotionTaskEvent = g_scheduler().addEvent(task);
+        // resetIdleTime();
+    }
+}
+
+void Player::setNextRuneActionTask(SchedulerTask* task) {
+    if (actionRuneTaskEvent != 0) {
+        g_scheduler().stopEvent(actionRuneTaskEvent);
+        actionRuneTaskEvent = 0;
+    }
+
+    cancelPush();
+
+    if (task) {
+        actionRuneTaskEvent = g_scheduler().addEvent(task);
+        // resetIdleTime();
+    }
 }
 
 uint32_t Player::getNextActionTime() const {
@@ -2042,7 +2056,11 @@ uint32_t Player::getNextActionTime() const {
 }
 
 uint32_t Player::getNextPotionActionTime() const {
-	return std::max<int64_t>(SCHEDULER_MINTICKS, nextPotionAction - OTSYS_TIME());
+    return std::max<int64_t>(SCHEDULER_MINTICKS, nextPotionAction - OTSYS_TIME());
+}
+
+uint32_t Player::getNextRuneActionTime() const {
+    return std::max<int64_t>(SCHEDULER_MINTICKS, nextRuneAction - OTSYS_TIME());
 }
 
 void Player::cancelPush() {
